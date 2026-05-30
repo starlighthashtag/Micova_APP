@@ -853,14 +853,29 @@ async function validateUsername(username){
   return{ok:true,msg:'✓ Available'};
 }
 function validateEmail(e){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((e||'').trim());}
+let _usernameTimer=null;
 function liveUsernameCheck(input){
   const s=document.getElementById('usernameStatus');
   if(!s)return;
   const v=input.value.trim();
-  if(!v){s.innerHTML='';input.className='';return;}
-  const r=validateUsernameFormat(v);
-  s.innerHTML=`<span style="color:${r.ok?'var(--success)':'var(--error)'}">${r.msg}</span>`;
-  input.className=r.ok?'valid':'invalid';
+  if(!v){s.innerHTML='';input.className='';clearTimeout(_usernameTimer);return;}
+  // Instant format check
+  const fmt=validateUsernameFormat(v);
+  if(!fmt.ok){
+    s.innerHTML=`<span style="color:var(--error)">${fmt.msg}</span>`;
+    input.className='invalid';
+    clearTimeout(_usernameTimer);
+    return;
+  }
+  s.innerHTML=`<span style="color:var(--muted)">Checking…</span>`;
+  input.className='';
+  // Debounce the network check — only fires 600ms after user stops typing
+  clearTimeout(_usernameTimer);
+  _usernameTimer=setTimeout(async()=>{
+    const result=await validateUsername(v);
+    s.innerHTML=`<span style="color:${result.ok?'var(--success)':'var(--error)'}">${result.msg}</span>`;
+    input.className=result.ok?'valid':'invalid';
+  },600);
 }
 
 // ─── PAGE NAV ──────────────────────────────────────────────────
