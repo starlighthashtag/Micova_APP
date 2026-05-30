@@ -697,10 +697,10 @@ const sb = {
     return res.json();
   },
   async delete(table, match) {
-    const params = Object.entries(match).map(([k,v]) => `${k}=eq.${v}`).join('&');
+    const params = Object.entries(match).map(([k,v]) => `${encodeURIComponent(k)}=eq.${encodeURIComponent(v)}`).join('&');
     await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`, {
       method: 'DELETE',
-      headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY }
+      headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' }
     });
   },
   async rpc(fn, params={}) {
@@ -742,9 +742,20 @@ const MAX_ADMINS = 2;
 
 // ─── SESSION (localStorage only) ──────────────────────────────
 function saveSession(){
-  state.loggedIn&&state.currentUser
-    ? LS.set('micova-session',{user:state.currentUser,isAdmin:state.isAdmin})
-    : LS.del('micova-session');
+  if(state.loggedIn && state.currentUser){
+    LS.set('micova-session',{
+      user:{
+        id: state.currentUser.id||null,
+        username: state.currentUser.username,
+        email: state.currentUser.email,
+        notify: state.currentUser.notify||'all',
+        isAdmin: !!state.currentUser.isAdmin
+      },
+      isAdmin: !!state.isAdmin
+    });
+  } else {
+    LS.del('micova-session');
+  }
 }
 
 // ─── DATA LOADERS ──────────────────────────────────────────────
@@ -945,8 +956,8 @@ function makeCard(item){
       <div class="card-title">${item.title}</div>
       <div class="card-excerpt">${item.excerpt||''}</div>
       <div class="card-meta">
-        <span>${item.date||''}</span>
-        ${item.readTime?`<span class="read-time">⏱ ${item.readTime}</span>`:''}
+        <span>${item.created_at?new Date(item.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):item.date||''}</span>
+        ${(item.read_time||item.readTime)?`<span class="read-time">⏱ ${item.read_time||item.readTime}</span>`:''}
         <div class="card-actions" onclick="event.stopPropagation()">
           <button class="action-btn${liked?' liked':''}" onclick="toggleLike(${JSON.stringify(item.id)},this)" title="Like">${liked?ICONS.heartFill:ICONS.heart}</button>
           <button class="action-btn${bm?' active':''}" onclick="toggleBookmark(${JSON.stringify(item.id)},this)" title="Bookmark">${bm?ICONS.bookmarkFill:ICONS.bookmark}</button>
@@ -1032,9 +1043,9 @@ function renderFeatured(){
       <h2 class="featured-title">${featured.title}</h2>
       <p class="featured-excerpt">${featured.excerpt||''}</p>
       <div class="featured-meta">
-        <span>By ${featured.author||'Micova Editorial'}</span>
-        ${featured.readTime?`<span class="read-time">⏱ ${featured.readTime}</span>`:''}
-        <span>${featured.date||''}</span>
+        <span>By ${featured.author_name||featured.author||'Micova Editorial'}</span>
+        ${(featured.read_time||featured.readTime)?`<span class="read-time">⏱ ${featured.read_time||featured.readTime}</span>`:''}
+        <span>${featured.created_at?new Date(featured.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):featured.date||''}</span>
       </div>
     </div>
   </div>`;
@@ -1080,10 +1091,11 @@ function openLightbox(id){
   document.getElementById('lightboxTitle').textContent=video.title;
   document.getElementById('lightboxTag').textContent=video.tag||'';
 
-  if(video.url){
+  const videoSrc = video.video_url || video.url;
+  if(videoSrc){
     // YouTube / Vimeo embed
-    let embedUrl=video.url;
-    if(embedUrl.includes('youtube.com/watch')){
+    let embedUrl=videoSrc;
+    if(typeof embedUrl==='string' && embedUrl.includes('youtube.com/watch')){
       const vid=new URL(embedUrl).searchParams.get('v');
       embedUrl=`https://www.youtube.com/embed/${vid}?autoplay=1`;
     }else if(embedUrl.includes('youtu.be/')){
@@ -1131,8 +1143,9 @@ async function openArticle(id){
     <span class="article-tag">${item.tag||''}</span>
     <h1 class="article-title">${item.title}</h1>
     <div class="article-meta">
-      <span>By ${item.author||'Micova Editorial'}</span><span>${item.date||''}</span>
-      ${item.readTime?`<span class="read-time">⏱ ${item.readTime}</span>`:''}
+      <span>By ${item.author_name||item.author||'Micova Editorial'}</span>
+      <span>${item.created_at?new Date(item.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):item.date||''}</span>
+      ${(item.read_time||item.readTime)?`<span class="read-time">⏱ ${item.read_time||item.readTime}</span>`:''}
       <span>💬 ${comments.length} comment${comments.length!==1?'s':''}</span>
     </div>
     <div class="article-body">${item.body||ARTICLE_BODY}</div>
@@ -1173,16 +1186,19 @@ async function openArticle(id){
 
 function renderComments(comments,itemId){
   if(!comments.length)return`<p style="color:var(--muted);font-size:.85rem">No comments yet. Be the first.</p>`;
-  return comments.map(c=>`
-    <div style="display:flex;gap:.75rem;margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border)">
-      <div class="avatar" style="width:34px;height:34px;font-size:.7rem;flex-shrink:0">${c.initials}</div>
+  return comments.map(c=>{
+    const initials=(c.username||'?').slice(0,2).toUpperCase();
+    const timeStr=c.created_at?new Date(c.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):c.time||'';
+    return`<div style="display:flex;gap:.75rem;margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border)">
+      <div class="avatar" style="width:34px;height:34px;font-size:.7rem;flex-shrink:0">${initials}</div>
       <div style="flex:1">
-        <div style="font-size:.8rem;font-weight:500;margin-bottom:.3rem">${c.username} <span style="color:var(--muted);font-weight:400">${c.time}</span></div>
+        <div style="font-size:.8rem;font-weight:500;margin-bottom:.3rem">${c.username||'Anonymous'} <span style="color:var(--muted);font-weight:400">${timeStr}</span></div>
         <div style="font-size:.88rem;color:var(--text2);line-height:1.6">${c.body}</div>
         ${state.isAdmin?`<button onclick="adminDeleteComment('${c.id}',${JSON.stringify(itemId)})" style="font-size:.72rem;color:var(--error);margin-top:.4rem;cursor:pointer;background:none;border:none;display:flex;align-items:center;gap:.3rem">
           <svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>Remove</button>`:''}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function getInitials(){return state.currentUser?state.currentUser.username.slice(0,2).toUpperCase():'?';}
@@ -1658,12 +1674,12 @@ async function renderAdminTab(_,tab){
   if(tab==='overview'){ const allUsersObj=await getUsers(); const allUsers=allUsersObj;
     el.innerHTML=`<div class="admin-header"><h2 class="admin-title">Dashboard</h2><span style="font-size:.8rem;color:var(--muted)">${new Date().toLocaleDateString()}</span></div>
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-label">Articles</div><div class="stat-value">${SEED.articles.length+cA.length}</div><div class="stat-change">+${cA.length} added</div></div>
-      <div class="stat-card"><div class="stat-label">Stories</div><div class="stat-value">${SEED.stories.length+cS.length}</div><div class="stat-change">+${cS.length} added</div></div>
-      <div class="stat-card"><div class="stat-label">Videos</div><div class="stat-value">${SEED.videos.length+cV.length}</div><div class="stat-change">+${cV.length} added</div></div>
-      <div class="stat-card"><div class="stat-label">Thoughts</div><div class="stat-value">${SEED.thoughts.length+cT.length}</div><div class="stat-change">+${cT.length} added</div></div>
+      <div class="stat-card"><div class="stat-label">Articles</div><div class="stat-value">${SEED.articles.length+cA.length}</div><div class="stat-change">Total published</div></div>
+      <div class="stat-card"><div class="stat-label">Stories</div><div class="stat-value">${SEED.stories.length+cS.length}</div><div class="stat-change">Total published</div></div>
+      <div class="stat-card"><div class="stat-label">Videos</div><div class="stat-value">${SEED.videos.length+cV.length}</div><div class="stat-change">Total published</div></div>
+      <div class="stat-card"><div class="stat-label">Thoughts</div><div class="stat-value">${SEED.thoughts.length+cT.length}</div><div class="stat-change">Total published</div></div>
       <div class="stat-card"><div class="stat-label">Registered Users</div><div class="stat-value">${Object.keys(allUsers).length}</div></div>
-      <div class="stat-card"><div class="stat-label">Feedback Entries</div><div class="stat-value">${state.feedbackLog.length}</div></div>
+      <div class="stat-card"><div class="stat-label">Feedback Entries</div><div class="stat-value" id="feedbackCount">—</div></div>
     </div>
     <h3 style="font-size:1rem;font-weight:500;margin-bottom:1rem">Your Published Content</h3>
     ${[...cA,...cS,...cT].length?`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--rad);overflow:hidden">
@@ -1672,7 +1688,7 @@ async function renderAdminTab(_,tab){
         <td>${(i.title||i.text||'').slice(0,38)}…</td>
         <td style="color:var(--muted);text-transform:capitalize">${i.type}</td>
         <td><span style="font-size:.7rem;color:var(--cyan)">${i.tag||'—'}</span></td>
-        <td style="color:var(--muted)">${i.date||'Today'}</td>
+        <td style="color:var(--muted)">${i.created_at?new Date(i.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}</td>
         <td><button class="btn-icon" style="width:28px;height:28px" onclick="adminDeleteContent(${JSON.stringify(i.id)},'${i.type}')">
           <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
         </button></td></tr>`).join('')}
@@ -1834,7 +1850,7 @@ async function renderAdminTab(_,tab){
         <td>${(i.title||'').slice(0,34)}…</td>
         <td style="color:var(--muted);text-transform:capitalize">${i.type}</td>
         <td><span style="font-size:.7rem;color:var(--cyan)">${i.tag||'—'}</span></td>
-        <td style="color:var(--muted)">${i.date||'—'}</td>
+        <td style="color:var(--muted)">${i.created_at?new Date(i.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}</td>
         <td>${i.likes||0}</td>
         <td><button class="btn-icon" style="width:28px;height:28px" onclick="adminDeleteContent(${JSON.stringify(i.id)},'${i.type}')">
           <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
