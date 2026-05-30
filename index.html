@@ -685,7 +685,9 @@ const sb = {
       headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', Prefer: 'return=representation' },
       body: JSON.stringify(data)
     });
-    return res.json();
+    const json = await res.json();
+    if (!res.ok) throw new Error(JSON.stringify(json));
+    return json;
   },
   async update(table, match, data) {
     const params = Object.entries(match).map(([k,v]) => `${k}=eq.${v}`).join('&');
@@ -694,7 +696,9 @@ const sb = {
       headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', Prefer: 'return=representation' },
       body: JSON.stringify(data)
     });
-    return res.json();
+    const json = await res.json();
+    if (!res.ok) throw new Error(JSON.stringify(json));
+    return json;
   },
   async delete(table, match) {
     const params = Object.entries(match).map(([k,v]) => `${encodeURIComponent(k)}=eq.${encodeURIComponent(v)}`).join('&');
@@ -1891,12 +1895,14 @@ async function publishThought(){
   const text=document.getElementById('thoughtText')?.value.trim();
   if(!text||text.length<10){showToast('Thought is too short.');return;}
   try {
-    await sb.insert('content',{type:'thought',body:text,status:'published',created_by:state.currentUser.id});
+    const payload = {type:'thought', body:text, status:'published'};
+    if(state.currentUser?.id) payload.created_by = state.currentUser.id;
+    await sb.insert('content', payload);
     await initRender();
     showToast('Thought posted!');
     document.getElementById('thoughtText').value='';
     document.getElementById('thoughtCount').textContent='0 / 280';
-  } catch(e){ showToast('Failed to post thought.'); console.error(e); }
+  } catch(e){ showToast('Failed: ' + e.message); console.error('Thought error:', e); }
 }
 
 // Store blob URL for local video files
@@ -1908,17 +1914,18 @@ async function publishVideo(){
   const url=document.getElementById('videoUrl')?.value.trim();
   if(!title){showToast('Video title is required.');return;}
   try {
-    await sb.insert('videos',{
+    const payload = {
       title, tag,
-      video_url: url||pendingVideoBlobUrl||null,
+      video_url: url||null,
       duration: duration||'—',
-      created_by: state.currentUser.id
-    });
+    };
+    if(state.currentUser?.id) payload.created_by = state.currentUser.id;
+    await sb.insert('videos', payload);
     await initRender();
     pendingVideoBlobUrl=null;
     showToast('Video added!');
     renderAdminTab(null,'overview');
-  } catch(e){ showToast('Failed to add video.'); console.error(e); }
+  } catch(e){ showToast('Failed: ' + e.message); console.error('Video error:', e); }
 }
 
 async function adminDeleteContent(id,type){
