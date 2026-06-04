@@ -708,11 +708,12 @@ const sb = {
     return json;
   },
   async delete(table, match) {
-    const params = Object.entries(match).map(([k,v]) => `${encodeURIComponent(k)}=eq.${encodeURIComponent(v)}`).join('&');
-    await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`, {
+    const params = Object.entries(match).map(([k,v]) => `${k}=eq.${v}`).join('&');
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`, {
       method: 'DELETE',
       headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' }
     });
+    if(!res.ok){ const t=await res.text(); throw new Error(t); }
   },
   async rpc(fn, params={}) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
@@ -1158,15 +1159,29 @@ function closeLightbox(e){
 
 // ─── ARTICLE VIEW ──────────────────────────────────────────────
 let currentItemId=null;
+let currentItemType='article';
 async function openArticle(id){
-  const all=[...DATA.articles,...DATA.stories];
-  const item=id==='featured'?DATA.articles[0]:all.find(a=>String(a.id)===String(id));
+  let item = null;
+  if(id==='featured'){
+    item = DATA.articles[0] || null;
+  } else {
+    // First try in-memory
+    item = [...DATA.articles,...DATA.stories].find(a=>String(a.id)===String(id));
+    // If not found, fetch directly from Supabase
+    if(!item){
+      try {
+        const rows = await sb.query('content',{select:'*',filter:{id:'eq.'+id}});
+        item = Array.isArray(rows)&&rows.length ? rows[0] : null;
+      } catch(e){ console.error('fetch article error:',e); }
+    }
+  }
   if(!item){ showToast('Article not found.'); return; }
   currentItemId=item.id;
+  currentItemType=item.type||'article';
   const liked=state.likes.has(item.id),bm=state.bookmarks.has(item.id);
   const comments=await getComments(item.id);
   document.getElementById('articleContent').innerHTML=`
-    <button onclick="history.back()" style="display:flex;align-items:center;gap:.5rem;color:var(--muted);font-size:.82rem;margin-bottom:2rem;cursor:pointer;background:none;border:none;font-family:var(--sans)">← Back</button>
+    <button onclick="showPage(currentItemType==='story'?'stories':'articles')" style="display:flex;align-items:center;gap:.5rem;color:var(--muted);font-size:.82rem;margin-bottom:2rem;cursor:pointer;background:none;border:none;font-family:var(--sans)">← Back</button>
     <span class="article-tag">${item.tag||''}</span>
     <h1 class="article-title">${item.title}</h1>
     <div class="article-meta">
@@ -1393,7 +1408,7 @@ function renderProfile(){
   switchProfileTab(document.querySelector('.profile-tab.active'),'liked');
 }
 
-function switchProfileTab(el,tab){
+async function switchProfileTab(el,tab){
   document.querySelectorAll('.profile-tab').forEach(t=>t.classList.remove('active'));
   if(el)el.classList.add('active');
   const content=document.getElementById('profileTabContent');
@@ -1403,7 +1418,7 @@ function switchProfileTab(el,tab){
   }else if(tab==='settings'){
     const u=state.currentUser;
     const alreadyAdmin=state.isAdmin;
-    const adminSlotsFull=!canPromote();
+    const adminSlotsFull=!(await canPromote());
     content.innerHTML=`<div style="max-width:480px">
       <h3 style="font-family:var(--serif);font-size:1.4rem;font-weight:300;margin-bottom:1.5rem">Account Settings</h3>
       <div class="field"><label>Username</label><input type="text" value="${u.username}" readonly style="opacity:.7"/><div class="field-hint">Username cannot be changed.</div></div>
@@ -1614,7 +1629,8 @@ async function claimAdmin(){
   }
 
   // Check admin limit
-  if(!canPromote()){
+  const canP = await canPromote();
+  if(!canP){
     showErr('Admin slots are full. Maximum of ' + MAX_ADMINS + ' admins allowed.');
     return;
   }
@@ -1702,18 +1718,18 @@ function adminTab(e,tab){
 
 async function renderAdminTab(_,tab){
   const el=document.getElementById('adminMain');if(!el)return;
-  const cA=DATA.articles.filter(a=>a.created_by===state.currentUser?.id)||[];
-  const cS=DATA.stories.filter(s=>s.created_by===state.currentUser?.id)||[];
-  const cV=DATA.videos.filter(v=>v.created_by===state.currentUser?.id)||[];
-  const cT=DATA.thoughts.filter(t=>t.created_by===state.currentUser?.id)||[];
+  const cA=DATA.articles||[];
+  const cS=DATA.stories||[];
+  const cV=DATA.videos||[];
+  const cT=DATA.thoughts||[];
 
   if(tab==='overview'){ const allUsersObj=await getUsers(); const allUsers=allUsersObj;
     el.innerHTML=`<div class="admin-header"><h2 class="admin-title">Dashboard</h2><span style="font-size:.8rem;color:var(--muted)">${new Date().toLocaleDateString()}</span></div>
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-label">Articles</div><div class="stat-value">${SEED.articles.length+cA.length}</div><div class="stat-change">Total published</div></div>
-      <div class="stat-card"><div class="stat-label">Stories</div><div class="stat-value">${SEED.stories.length+cS.length}</div><div class="stat-change">Total published</div></div>
-      <div class="stat-card"><div class="stat-label">Videos</div><div class="stat-value">${SEED.videos.length+cV.length}</div><div class="stat-change">Total published</div></div>
-      <div class="stat-card"><div class="stat-label">Thoughts</div><div class="stat-value">${SEED.thoughts.length+cT.length}</div><div class="stat-change">Total published</div></div>
+      <div class="stat-card"><div class="stat-label">Articles</div><div class="stat-value">${DATA.articles.length}</div><div class="stat-change">Total published</div></div>
+      <div class="stat-card"><div class="stat-label">Stories</div><div class="stat-value">${DATA.stories.length}</div><div class="stat-change">Total published</div></div>
+      <div class="stat-card"><div class="stat-label">Videos</div><div class="stat-value">${DATA.videos.length}</div><div class="stat-change">Total published</div></div>
+      <div class="stat-card"><div class="stat-label">Thoughts</div><div class="stat-value">${DATA.thoughts.length}</div><div class="stat-change">Total published</div></div>
       <div class="stat-card"><div class="stat-label">Registered Users</div><div class="stat-value">${Object.keys(allUsers).length}</div></div>
       <div class="stat-card"><div class="stat-label">Feedback Entries</div><div class="stat-value" id="feedbackCount">—</div></div>
     </div>
@@ -1721,7 +1737,7 @@ async function renderAdminTab(_,tab){
     ${[...cA,...cS,...cT].length?`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--rad);overflow:hidden">
       <table class="admin-table"><thead><tr><th>Title</th><th>Type</th><th>Tag</th><th>Date</th><th>Actions</th></tr></thead><tbody>
       ${[...cA,...cS,...cT].map(i=>`<tr>
-        <td>${(i.title||i.text||'').slice(0,38)}…</td>
+        <td>${(i.title||i.body||'').slice(0,38)}…</td>
         <td style="color:var(--muted);text-transform:capitalize">${i.type}</td>
         <td><span style="font-size:.7rem;color:var(--cyan)">${i.tag||'—'}</span></td>
         <td style="color:var(--muted)">${i.created_at?new Date(i.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}</td>
@@ -1762,18 +1778,9 @@ async function renderAdminTab(_,tab){
     <div class="admin-field" style="margin-bottom:1rem"><label>YouTube / Vimeo URL</label>
       <input type="url" id="videoUrl" placeholder="https://youtube.com/watch?v=…"/>
     </div>
-    <div style="text-align:center;color:var(--muted);font-size:.8rem;margin:.5rem 0 1rem">— or upload a local file —</div>
-    <div class="upload-area" id="videoDropZone">
-      <input type="file" id="videoFileInput" accept="video/mp4,video/quicktime,video/webm" onchange="handleVideoUpload(this)"/>
-      <div class="upload-icon">🎬</div>
-      <div style="font-weight:500;margin-bottom:.3rem">Click to select video file</div>
-      <div style="font-size:.8rem">MP4, MOV, WebM — plays directly in the lightbox</div>
+    <div style="background:var(--cyan4);border:1px solid var(--border2);border-radius:var(--rad-sm);padding:.85rem 1.1rem;margin-bottom:1.25rem;font-size:.82rem;color:var(--text2)">
+      Videos must be hosted on YouTube or Vimeo. Paste the URL below and it will be embedded for all users across all devices.
     </div>
-    <div class="upload-progress" id="uploadProgress">
-      <div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--muted)"><span id="uploadFilename">Loading…</span><span id="uploadPct">0%</span></div>
-      <div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadFill"></div></div>
-    </div>
-    <div class="video-preview-wrap" id="videoPreviewWrap"><video id="videoPreviewEl" controls></video></div>
     <div class="form-row" style="margin-top:1rem">
       <div class="admin-field"><label>Title</label><input type="text" id="videoTitle" placeholder="Video title…"/></div>
       <div class="admin-field"><label>Category</label>
@@ -1807,7 +1814,7 @@ async function renderAdminTab(_,tab){
         <td style="font-weight:500">${c.username}</td>
         <td style="color:var(--muted)">${c.body.slice(0,60)}${c.body.length>60?'…':''}</td>
         <td style="color:var(--muted);font-size:.8rem">${c.itemTitle.slice(0,30)}</td>
-        <td style="color:var(--muted)">${new Date(c.ts).toLocaleDateString()}</td>
+        <td style="color:var(--muted)">${c.created_at?new Date(c.created_at).toLocaleDateString():''}</td>
         <td><button class="btn-icon" style="width:28px;height:28px" onclick="adminDeleteComment('${c.id}',${JSON.stringify(c.itemId)});renderAdminTab(null,'comments')">
           <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
         </button></td></tr>`).join('')}
@@ -1856,10 +1863,10 @@ async function renderAdminTab(_,tab){
       <table class="admin-table"><thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Joined</th><th>Actions</th></tr></thead><tbody>
       ${list.map(u=>{
         const isSelf=state.currentUser&&state.currentUser.username.toLowerCase()===u.username.toLowerCase();
-        const promoteBtn=!u.is_admin&&!atLimit
+        const promBtn=!u.is_admin&&!atLimit
           ?`<button class="btn-outline" style="padding:.25rem .7rem;font-size:.72rem;margin-right:.4rem" onclick="promoteUser('${u.username}')">Make Admin</button>`
           :(!u.is_admin&&atLimit?`<span style="font-size:.72rem;color:var(--muted)">Limit reached</span>`:'');
-        const demoteBtn=u.is_admin&&!isSelf
+        const demBtn=u.is_admin&&!isSelf
           ?`<button style="padding:.25rem .7rem;font-size:.72rem;border:1px solid rgba(226,92,92,.3);color:var(--error);border-radius:var(--rad-sm);background:rgba(226,92,92,.08);cursor:pointer" onclick="demoteUser('${u.username}')">Remove Admin</button>`
           :(u.is_admin&&isSelf?`<span style="font-size:.72rem;color:var(--muted)">You</span>`:'');
         return`<tr>
@@ -1871,7 +1878,7 @@ async function renderAdminTab(_,tab){
             :'background:var(--surface2);color:var(--muted)'}">${u.is_admin?'Admin':'Member'}</span></td>
           <td style="color:var(--muted)">${new Date(u.createdAt).toLocaleDateString()}</td>
           <td style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
-            ${promoteBtn}${demoteBtn}
+            ${promBtn}${demBtn}
             ${!isSelf?`<button class="btn-icon" style="width:28px;height:28px;flex-shrink:0" onclick="adminDeleteUser('${u.username}')">
               <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
             </button>`:''}
