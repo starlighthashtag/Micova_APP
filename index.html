@@ -667,61 +667,69 @@ const ICONS = {
 const SUPABASE_URL = 'https://luompbckuxkpacixjgqc.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1b21wYmNrdXhrcGFjaXhqZ3FjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxMDQ2MDYsImV4cCI6MjA5NTY4MDYwNn0.PzxyiygQs2_EbkeZjmS505w99g2OnlY3nUHPJzOyBKM';
 
+const H = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' };
+
 const sb = {
-  async query(table, options={}) {
-    let url = `${SUPABASE_URL}/rest/v1/${table}`;
-    const params = [];
-    if (options.select)  params.push(`select=${options.select}`);
-    if (options.filter)  Object.entries(options.filter).forEach(([k,v]) => params.push(`${k}=${v}`));
-    if (options.order)   params.push(`order=${options.order}`);
-    if (options.limit)   params.push(`limit=${options.limit}`);
-    if (params.length)   url += '?' + params.join('&');
-    const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' } });
-    return res.json();
+  // GET rows — filters is plain object e.g. {type:'article',status:'published'}
+  async select(table, filters={}, opts={}) {
+    const p = [];
+    p.push('select=' + (opts.select||'*'));
+    Object.entries(filters).forEach(([k,v]) => p.push(`${k}=eq.${encodeURIComponent(v)}`));
+    if(opts.order) p.push('order=' + opts.order);
+    if(opts.limit) p.push('limit=' + opts.limit);
+    const url = `${SUPABASE_URL}/rest/v1/${table}?${p.join('&')}`;
+    const res = await fetch(url, { headers: H });
+    const text = await res.text();
+    let json; try { json = JSON.parse(text); } catch(e){ return []; }
+    if(!res.ok){ console.error('sb.select error', table, json); return []; }
+    return Array.isArray(json) ? json : [];
   },
+
+  // INSERT — returns inserted row(s)
   async insert(table, data) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
       method: 'POST',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': 'Bearer ' + SUPABASE_KEY,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation'
-      },
+      headers: { ...H, Prefer: 'return=representation' },
       body: JSON.stringify(data)
     });
     const text = await res.text();
-    let json;
-    try { json = JSON.parse(text); } catch(e){ json = text; }
-    if (!res.ok) throw new Error(typeof json === 'object' ? (json.message || json.hint || JSON.stringify(json)) : text);
+    let json; try { json = JSON.parse(text); } catch(e){ json = text; }
+    if(!res.ok) throw new Error(typeof json==='object' ? (json.message||json.hint||JSON.stringify(json)) : text);
     return json;
   },
+
+  // UPDATE — match is {column: value}
   async update(table, match, data) {
-    const params = Object.entries(match).map(([k,v]) => `${k}=eq.${v}`).join('&');
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`, {
+    const p = Object.entries(match).map(([k,v]) => `${k}=eq.${encodeURIComponent(v)}`).join('&');
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${p}`, {
       method: 'PATCH',
-      headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+      headers: { ...H, Prefer: 'return=representation' },
       body: JSON.stringify(data)
     });
-    const json = await res.json();
-    if (!res.ok) throw new Error(JSON.stringify(json));
+    const text = await res.text();
+    let json; try { json = JSON.parse(text); } catch(e){ json = text; }
+    if(!res.ok) throw new Error(typeof json==='object' ? (json.message||json.hint||JSON.stringify(json)) : text);
     return json;
   },
+
+  // DELETE — match is {column: value}
   async delete(table, match) {
-    const params = Object.entries(match).map(([k,v]) => `${k}=eq.${v}`).join('&');
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`, {
+    const p = Object.entries(match).map(([k,v]) => `${k}=eq.${encodeURIComponent(v)}`).join('&');
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${p}`, {
       method: 'DELETE',
-      headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' }
+      headers: H
     });
     if(!res.ok){ const t=await res.text(); throw new Error(t); }
   },
+
+  // RPC — call a postgres function
   async rpc(fn, params={}) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
       method: 'POST',
-      headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' },
+      headers: H,
       body: JSON.stringify(params)
     });
-    return res.json();
+    return res.ok;
   }
 };
 
@@ -774,10 +782,10 @@ function saveSession(){
 async function loadDATA(){
   try {
     const [articles, stories, thoughts, videos] = await Promise.all([
-      sb.query('content', { select:'*', filter:{'type':'eq.article','status':'eq.published'}, order:'created_at.desc' }),
-      sb.query('content', { select:'*', filter:{'type':'eq.story','status':'eq.published'}, order:'created_at.desc' }),
-      sb.query('content', { select:'*', filter:{'type':'eq.thought','status':'eq.published'}, order:'created_at.desc' }),
-      sb.query('videos',  { select:'*', order:'created_at.desc' }),
+      sb.select('content', {type:'article',status:'published'}, {order:'created_at.desc'}),
+      sb.select('content', {type:'story',  status:'published'}, {order:'created_at.desc'}),
+      sb.select('content', {type:'thought',status:'published'}, {order:'created_at.desc'}),
+      sb.select('videos',  {}, {order:'created_at.desc'}),
     ]);
     DATA.articles = Array.isArray(articles) ? articles : [];
     DATA.stories  = Array.isArray(stories)  ? stories  : [];
@@ -789,7 +797,7 @@ async function loadDATA(){
 async function loadUserLikes(){
   if(!state.currentUser) return;
   try {
-    const rows = await sb.query('likes', { select:'content_id,video_id', filter:{'user_id':'eq.'+state.currentUser.id} });
+    const rows = await sb.select('likes', {user_id:state.currentUser.id}, {select:'content_id,video_id'});
     state.likes = new Set();
     if(Array.isArray(rows)) rows.forEach(r => { if(r.content_id) state.likes.add(r.content_id); if(r.video_id) state.likes.add(r.video_id); });
   } catch(e) { console.error('loadUserLikes:', e); }
@@ -798,7 +806,7 @@ async function loadUserLikes(){
 async function loadUserBookmarks(){
   if(!state.currentUser) return;
   try {
-    const rows = await sb.query('bookmarks', { select:'content_id', filter:{'user_id':'eq.'+state.currentUser.id} });
+    const rows = await sb.select('bookmarks', {user_id:state.currentUser.id}, {select:'content_id'});
     state.bookmarks = new Set();
     if(Array.isArray(rows)) rows.forEach(r => { if(r.content_id) state.bookmarks.add(r.content_id); });
   } catch(e) { console.error('loadUserBookmarks:', e); }
@@ -806,7 +814,7 @@ async function loadUserBookmarks(){
 
 // ─── USER FUNCTIONS (Supabase) ─────────────────────────────────
 async function getUsers(){
-  const rows = await sb.query('users', { select:'*', order:'created_at.desc' });
+  const rows = await sb.select('users', {}, {order:'created_at.desc'});
   // Return as object keyed by username for backwards compat
   const obj = {};
   if(Array.isArray(rows)) rows.forEach(u => { obj[u.username.toLowerCase()] = u; });
@@ -814,17 +822,17 @@ async function getUsers(){
 }
 
 async function getUserByEmail(email){
-  const rows = await sb.query('users', { select:'*', filter:{'email':'eq.'+email.toLowerCase()} });
+  const rows = await sb.select('users', {email:email.toLowerCase()});
   return Array.isArray(rows) && rows.length ? rows[0] : null;
 }
 
 async function getUserByUsername(username){
-  const rows = await sb.query('users', { select:'*', filter:{'username':'eq.'+username} });
+  const rows = await sb.select('users', {username:username});
   return Array.isArray(rows) && rows.length ? rows[0] : null;
 }
 
 async function getAdminCount(){
-  const rows = await sb.query('users', { select:'id', filter:{'is_admin':'eq.true'} });
+  const rows = await sb.select('users', {is_admin:true}, {select:'id'});
   return Array.isArray(rows) ? rows.length : 0;
 }
 
@@ -834,7 +842,7 @@ async function canPromote(){
 }
 
 async function getComments(itemId){
-  const rows = await sb.query('comments', { select:'*', filter:{'content_id':'eq.'+itemId}, order:'created_at.desc' });
+  const rows = await sb.select('comments', {content_id:itemId}, {order:'created_at.desc'});
   return Array.isArray(rows) ? rows : [];
 }
 
@@ -1170,7 +1178,7 @@ async function openArticle(id){
     // If not found, fetch directly from Supabase
     if(!item){
       try {
-        const rows = await sb.query('content',{select:'*',filter:{id:'eq.'+id}});
+        const rows = await sb.select('content', {id:id});
         item = Array.isArray(rows)&&rows.length ? rows[0] : null;
       } catch(e){ console.error('fetch article error:',e); }
     }
@@ -1393,8 +1401,13 @@ async function renderBookmarks(){
   el.innerHTML='<div style="text-align:center;padding:3rem;color:var(--muted)">Loading…</div>';
   try {
     if(!state.currentUser){el.innerHTML='<div class="empty-state"><p>Sign in to see your bookmarks.</p></div>';return;}
-    const rows=await sb.query('bookmarks',{select:'content_id,content(*)',filter:{'user_id':'eq.'+state.currentUser.id},order:'created_at.desc'});
-    const saved=Array.isArray(rows)?rows.map(r=>r.content).filter(Boolean):[];
+    const bmRows=await sb.select('bookmarks',{user_id:state.currentUser.id},{select:'content_id'});
+    const bmIds=Array.isArray(bmRows)?bmRows.map(r=>r.content_id).filter(Boolean):[];
+    const saved=[];
+    for(const cid of bmIds){
+      const rows=await sb.select('content',{id:cid});
+      if(rows.length) saved.push(rows[0]);
+    }
     el.innerHTML=saved.length?`<div class="card-grid card-grid-3">${saved.map(makeCard).join('')}</div>`:`<div class="empty-state"><div class="empty-icon">🔖</div><p>No bookmarks yet.<br>Save articles and stories to revisit them here.</p></div>`;
   } catch(e){ el.innerHTML='<div class="empty-state"><p>Could not load bookmarks.</p></div>'; }
 }
@@ -1723,14 +1736,14 @@ async function renderAdminTab(_,tab){
   const cV=DATA.videos||[];
   const cT=DATA.thoughts||[];
 
-  if(tab==='overview'){ const allUsersObj=await getUsers(); const allUsers=allUsersObj;
+  if(tab==='overview'){ const allUsersObj=await getUsers();
     el.innerHTML=`<div class="admin-header"><h2 class="admin-title">Dashboard</h2><span style="font-size:.8rem;color:var(--muted)">${new Date().toLocaleDateString()}</span></div>
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-label">Articles</div><div class="stat-value">${DATA.articles.length}</div><div class="stat-change">Total published</div></div>
       <div class="stat-card"><div class="stat-label">Stories</div><div class="stat-value">${DATA.stories.length}</div><div class="stat-change">Total published</div></div>
       <div class="stat-card"><div class="stat-label">Videos</div><div class="stat-value">${DATA.videos.length}</div><div class="stat-change">Total published</div></div>
       <div class="stat-card"><div class="stat-label">Thoughts</div><div class="stat-value">${DATA.thoughts.length}</div><div class="stat-change">Total published</div></div>
-      <div class="stat-card"><div class="stat-label">Registered Users</div><div class="stat-value">${Object.keys(allUsers).length}</div></div>
+      <div class="stat-card"><div class="stat-label">Registered Users</div><div class="stat-value">${Object.keys(allUsersObj).length}</div></div>
       <div class="stat-card"><div class="stat-label">Feedback Entries</div><div class="stat-value" id="feedbackCount">—</div></div>
     </div>
     <h3 style="font-size:1rem;font-weight:500;margin-bottom:1rem">Your Published Content</h3>
@@ -1805,8 +1818,19 @@ async function renderAdminTab(_,tab){
 
   }else if(tab==='comments'){
     el.innerHTML='<div style="padding:2rem;color:var(--muted)">Loading comments…</div>';
-    const rawComments=await sb.query('comments',{select:'*,content(title)',order:'created_at.desc',limit:50});
-    const allComments=Array.isArray(rawComments)?rawComments.map(c=>({...c,itemTitle:c.content?.title||'Unknown',itemId:c.content_id})):[];
+    const rawComments=await sb.select('comments',{},{order:'created_at.desc',limit:50});
+    // Fetch content titles separately
+    const allComments=[];
+    if(Array.isArray(rawComments)){
+      for(const c of rawComments){
+        let itemTitle='Unknown';
+        if(c.content_id){
+          const ct=await sb.select('content',{id:c.content_id},{select:'title'});
+          if(ct.length) itemTitle=ct[0].title||'Unknown';
+        }
+        allComments.push({...c,itemTitle,itemId:c.content_id});
+      }
+    }
     el.innerHTML=`<div class="admin-header"><h2 class="admin-title">Comment Moderation</h2></div>
     ${allComments.length?`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--rad);overflow:hidden">
       <table class="admin-table"><thead><tr><th>User</th><th>Comment</th><th>Article</th><th>Date</th><th>Actions</th></tr></thead><tbody>
@@ -1822,7 +1846,7 @@ async function renderAdminTab(_,tab){
 
   }else if(tab==='feedback'){
     el.innerHTML='<div style="padding:2rem;color:var(--muted)">Loading feedback…</div>';
-    const rawFeedback=await sb.query('feedback',{select:'*',order:'created_at.desc',limit:100});
+    const rawFeedback=await sb.select('feedback',{},{order:'created_at.desc',limit:100});
     const logs=Array.isArray(rawFeedback)?rawFeedback:[];
     const ratings=logs.filter(l=>l.rating);
     const avg=ratings.length?(ratings.reduce((a,b)=>a+b.rating,0)/ratings.length).toFixed(1):'—';
